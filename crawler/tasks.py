@@ -15,10 +15,10 @@ app = Celery('tasks')
 app.config_from_object('crawler.celeryconfig')
 
 
-def get_twitter_api():
+def get_twitter_api(**api_kwargs):
     auth = tweepy.OAuthHandler(secrets.consumer_key, secrets.consumer_secret)
     auth.set_access_token(secrets.access_token, secrets.token_secret)
-    api = tweepy.API(auth)
+    api = tweepy.API(auth, **api_kwargs)
     return api
 
 
@@ -27,6 +27,19 @@ def get_neo4j_session():
         settings.NEO4J_URL, auth=basic_auth(secrets.neo4j_user, secrets.neo4j_password)
     )
     return driver.session()
+
+
+@app.task(bind=True, rate_limit=0.1, max_retries=None)
+def search(self, text, count=100):
+    api = get_twitter_api()
+
+    try:
+        return api.search(text, rpp=count)
+    except tweepy.TweepError:
+        logger.exception(
+            'while retrieving page %d of search query "%s"', page, text
+        )
+        raise self.retry(countdown=15*60)
 
 
 @app.task(bind=True, rate_limit=0.1, max_retries=None)
