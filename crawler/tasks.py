@@ -29,7 +29,7 @@ def get_neo4j_session():
     return driver.session()
 
 
-@app.task(bind=True, rate_limit=0.2)
+@app.task(bind=True, rate_limit=0.1, max_retries=None)
 def expand_tweet(self, tweet):
     api = get_twitter_api()
 
@@ -38,13 +38,13 @@ def expand_tweet(self, tweet):
             tweet = api.get_status(tweet)
         except tweepy.TweepError:
             logger.exception('error while retrieving tweet %s', tweet)
-            raise self.retry()
+            raise self.retry(countdown=15*60)
 
     try:
         retweets = api.retweets(tweet.id, count=100)
     except tweepy.TweepError:
         logger.exception('error while retrieving retweets of tweet %s', tweet.id)
-        raise self.retry()
+        raise self.retry(countdown=15*60)
 
     logger.info('tweet %d was retweeted %d times, but we only got %d :(',
                 tweet.id, tweet.retweet_count, len(retweets))
