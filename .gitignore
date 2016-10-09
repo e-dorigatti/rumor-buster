@@ -3,3 +3,8 @@
 secrets.py
 .idea/
 .idea/
+tweepydata/
+redisdata/
+esdata/
+neo4jdata/
+rabbitmqdata/
