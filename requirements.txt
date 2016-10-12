@@ -4,3 +4,4 @@ redis==2.10.5
 click==6.6
 neo4j-driver==1.0.2
 progressbar2==3.10.1
+elasticsearch==2.4.0

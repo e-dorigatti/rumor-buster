@@ -36,7 +36,7 @@ def user(user):
 
 
 @crawl.command()
-@crawl.argument('track', nargs=-1)
+@click.argument('track', nargs=-1)
 @click.option('--language', '-l', default=['en'], multiple=True)
 def stream(track, language):
     """ listens to the stream and saves live tweets matching the given track """
@@ -48,6 +48,12 @@ def stream(track, language):
 def trending(language):
     """ adaptively listens to and saves tweets on trending topics """
     tasks.TrendingStreamListener.start(languages=language)
+
+
+@crawl.command()
+@click.option('--language', '-l', default=['en'], multiple=True)
+def interesting(language):
+    tasks.InterestingStuffStreamListener.start(languages=language)
 
 
 if __name__ == '__main__':

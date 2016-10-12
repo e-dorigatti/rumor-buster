@@ -8,9 +8,12 @@ import json
 import progressbar
 import urllib
 import datetime
+import logging
 
 
 logger = get_task_logger(__name__)
+logging.getLogger('neo4j.bolt').setLevel(logging.WARN)
+logging.getLogger('requests').setLevel(logging.WARN)
 
 app = Celery('tasks')
 app.config_from_object('crawler.celeryconfig')
@@ -108,8 +111,10 @@ class BaseStreamListener(app.Task, tweepy.StreamListener):
         self.logger = get_task_logger(self.__name__)
         self.count = 0
         self.stream = None
+        self.must_stop = False
         self.pbar = progressbar.ProgressBar(
             max_value=progressbar.UnknownLength,
+            redirect_stdout=True,
         )
 
     def get_query(self):
@@ -120,7 +125,7 @@ class BaseStreamListener(app.Task, tweepy.StreamListener):
         return None
 
     @classmethod
-    def start(cls, track=None, languages=None):
+    def start(cls, track=None, languages=None, forever=True):
         matching = [
             task for task in app.tasks.values()
             if isinstance(task, cls)
@@ -129,11 +134,13 @@ class BaseStreamListener(app.Task, tweepy.StreamListener):
         listener = matching[0]
         listener.this_task = listener
 
-        track = listener.get_query() or track
-        assert track is not None, 'forgot to set stream filter'
-
         listener.stream = tweepy.Stream(auth=listener.api.auth, listener=listener)
-        listener.stream.filter(languages=languages or ['en'], track=track)
+        while forever and not listener.must_stop:
+            track = listener.get_query() or track
+            assert track is not None, 'forgot to set stream filter'
+            #listener.stream.filter(languages=languages or ['en'], track=track)
+            listener.stream.filter(track=track)
+            print 'RESET'
 
     def run(self, status):
         raise NotImplementedError
@@ -141,11 +148,17 @@ class BaseStreamListener(app.Task, tweepy.StreamListener):
     def on_status(self, status):
         if self.this_task:
             self.this_task.delay(status._json)
-            self.count += 1
+            self.count += 2
             self.pbar.update(self.count)
         else:
             self.stream.disconnect()
             logger.info('disconnected from stream')
+
+    def on_error(self, status_code):
+        print 'got error code', status_code
+
+    def on_disconnect(self, notice):
+        print 'disconnected, notice:', notice
 
 
 class SimpleStreamListener(BaseStreamListener):
@@ -211,12 +224,160 @@ class TrendingStreamListener(SimpleStreamListener):
         now = datetime.datetime.utcnow()
         if (not self.update_in_progress and
            (now - self.updated).total_seconds() > self.update_interval_secs):
-
             self.update_in_progress = True
-            new_track = self.get_query()
             self.stream.disconnect()
-            self.stream.filter(track=new_track, async=True)
-            self.updated = now
-            self.update_in_progress = False
 
         super(TrendingStreamListener, self).on_status(status)
+
+
+class InterestingStuffStreamListener(SimpleStreamListener):
+    RETWEETS_SET_KEY = 'interesting-retweets-list'
+    SAVED_COUNT_KEY = 'interesting-saved'
+    MIN_RETWEETS_KEY = 'interesting-min-retweets'
+
+    TOP_RETWEET_PERCENT = 15
+    MAX_RETWEET_THRESHOLD = 15
+    STATS_UPDATE_INTERVAL = 50  # tweets
+
+    def __init__(self):
+        SimpleStreamListener.__init__(self)
+        self.redis = utils.get_redis()
+        self.redis.set(self.SAVED_COUNT_KEY, 0)
+        self.redis.set(self.MIN_RETWEETS_KEY, 1)
+        self.update_in_progress = False
+
+        self.pbar = progressbar.ProgressBar(
+            max_value=progressbar.UnknownLength,
+            redirect_stdout=True,
+            widgets=[
+                progressbar.RotatingMarker(), ' ',
+                'Tweets: ', progressbar.Counter(), ' r - ',
+                utils.FlexibleDynamicMessage(
+                    kwarg_name='saved',
+                    label='',
+                    format_defined='{value} s',
+                    format_undefined='? s',
+                ), ' | ',
+                progressbar.Timer(), ' | ',
+                utils.FlexibleDynamicMessage(
+                    kwarg_name='base',
+                    label='Base',
+                    format_defined='{label}: {count} [1...{max:.3g}]',
+                    format_undefined='{label}: ------'
+                ), ' | ',
+                utils.FlexibleDynamicMessage(
+                    kwarg_name='top',
+                    label='Top %d%%' % self.TOP_RETWEET_PERCENT,
+                    format_defined='{label}: {rts:.3g} RTs ({rounding} - {round_down:.3g}%/{round_up:.3g}%)',
+                    format_undefined='{label}: ------'
+                ),
+            ]
+        )
+
+    def get_query(self):
+        self.redis.delete(self.RETWEETS_SET_KEY)
+
+        places = [
+            1,
+            23424975,   # UK
+            23424977,   # USA
+            23424748,   # Australia
+            23424916,   # New Zealand
+        ] + [place['woeid'] for place in self.api.trends_available()]
+
+        trends = []
+        try:
+            for each in places:
+                tts = [topic for topic in self.api.trends_place(each)[0]['trends']
+                       if topic['tweet_volume']]
+                trends.extend(tts)
+        except tweepy.RateLimitError:
+            pass
+
+        assert trends, 'rate limited'
+        trends = sorted(
+            trends, key=lambda t: t['tweet_volume'], reverse=True
+        )[:400]
+        track = [urllib.unquote(t['query']) for t in trends]
+        print 'will listen to %d trending topics' % len(trends)
+
+        return track
+
+    def run(self, status):
+        orig_tweet_id = status.get('retweeted_status', {}).get('id_str', None)
+
+        orig_retweets = 0
+        if orig_tweet_id:
+            orig_retweets = self.redis.zincrby(self.RETWEETS_SET_KEY, orig_tweet_id, 1)
+
+        min_rts = int(self.redis.get(self.MIN_RETWEETS_KEY))
+        if orig_retweets >= min_rts:
+            self.redis.incr(self.SAVED_COUNT_KEY)
+            SimpleStreamListener.run(self, status)
+            status = 'SAVED'
+        else:
+            status = 'SKIPPED'
+
+        logger.info('tweet %s retweeted %d times, threshold is %d, %s',
+                    orig_tweet_id, orig_retweets, min_rts, status)
+
+    def on_status(self, status):
+        if self.count and self.count % self.STATS_UPDATE_INTERVAL == 0:
+            min_rts = self.update_statistics()
+            if min_rts > self.MAX_RETWEET_THRESHOLD and not self.update_in_progress:
+                print 'reached threshold, resetting'
+                self.update_in_progress = True
+                self.stream.disconnect()
+
+        super(InterestingStuffStreamListener, self).on_status(status)
+
+    def update_statistics(self):
+        num_tweets = self.redis.zcard(self.RETWEETS_SET_KEY)
+        scores = [s for (k, s) in self.redis.zrange(self.RETWEETS_SET_KEY, 0,
+                                                    num_tweets, withscores=True)]
+        if not scores:
+            return -1
+
+        count = len(scores)
+        top_k_pcentile = count * (1 - self.TOP_RETWEET_PERCENT / 100.0)
+        num_rounded_down = sum(1 for x in scores if x >= scores[int(top_k_pcentile)])
+        pcent_rounded_down = 100.0 * num_rounded_down / count
+
+        num_rounded_up = sum(
+            1 for x in scores if x >= scores[int(top_k_pcentile)] + 1
+        )
+        pcent_rounded_up = 100.0 * num_rounded_up / count
+
+        # sanity check
+        assert pcent_rounded_down >= self.TOP_RETWEET_PERCENT >= pcent_rounded_up, (
+            pcent_rounded_down, self.TOP_RETWEET_PERCENT, pcent_rounded_up
+        )
+
+        # choose the rounding so as to be closest to the given percentage
+        if self.TOP_RETWEET_PERCENT - pcent_rounded_up < pcent_rounded_down - self.TOP_RETWEET_PERCENT:
+            min_rts = scores[int(top_k_pcentile)] + 1
+            rounding = 'U'
+        else:
+            min_rts = scores[int(top_k_pcentile)]
+            rounding = 'D'
+
+        assert int(min_rts) > 0  # shouldn't happen, right?
+        self.redis.set(self.MIN_RETWEETS_KEY, int(min_rts))
+
+        # update progress bar
+        saved = self.redis.get(self.SAVED_COUNT_KEY)
+        self.pbar.update(
+            self.count, saved=saved,
+            base={
+                'count': len(scores),
+                'max': max(scores)
+            },
+            top={
+                'rts': min_rts,
+                'round_up': pcent_rounded_up,
+                'round_down': pcent_rounded_down,
+                'rounding': rounding,
+            }
+        )
+
+        return min_rts

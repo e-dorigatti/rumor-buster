@@ -5,6 +5,7 @@ import redis
 from neo4j.v1 import GraphDatabase, basic_auth
 import secrets
 import json
+from progressbar import widgets
 
 
 def get_twitter_api(**api_kwargs):
@@ -61,3 +62,20 @@ def get_es_url(type_, id_):
 
     es_url = '%s/%s/%s/%s' % (settings.ES_HOST, index, doctype, id_)
     return es_url
+
+
+class FlexibleDynamicMessage(widgets.DynamicMessage):
+    def __init__(self, kwarg_name, label, format_defined, format_undefined):
+        self.name = kwarg_name
+        self.label = label
+        self.format_defined = format_defined
+        self.format_undefined = format_undefined
+
+    def __call__(self, progress, data):
+        value = data['dynamic_messages'].get(self.name)
+        if value is None:
+            return self.format_undefined.format(label=self.label)
+        elif isinstance(value, dict):
+            return self.format_defined.format(label=self.label, **value)
+        else:
+            return self.format_defined.format(label=self.label, value=value)
