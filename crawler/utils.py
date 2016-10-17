@@ -2,7 +2,6 @@ import tweepy
 import requests
 import settings
 import redis
-from neo4j.v1 import GraphDatabase, basic_auth
 import secrets
 import json
 from progressbar import widgets
@@ -19,37 +18,9 @@ def get_twitter_api(**api_kwargs):
     return api
 
 
-def get_neo4j_session():
-    driver = GraphDatabase.driver(
-        settings.NEO4J_URL, auth=basic_auth(secrets.neo4j_user, secrets.neo4j_password)
-    )
-    return driver.session()
-
-
 def get_redis():
     rs = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT)
     return rs
-
-
-def add_tweet(tweet_id, graph=None):
-    g = graph or get_neo4j_session()
-    try:
-        g.run('MERGE(t:tweet {id: {tid}})', parameters=dict(tid=tweet_id))
-    finally:
-        if not graph:
-            g.close()
-
-
-def add_relation(id_from, id_to, label, graph=None):
-    g = graph or get_neo4j_session()
-    try:
-        g.run(
-            'MATCH (t:tweet {id: {id1}}), (u:tweet {id: {id2}}) MERGE (t)-[r:%s]->(u)' % label,
-            parameters=dict(id1=id_from, id2=id_to)
-        )
-    finally:
-        if not graph:
-            g.close()
 
 
 def get_es_url(type_, id_):

@@ -1,6 +1,8 @@
 from celery import Celery
+import random
 import tweepy
 from celery.utils.log import get_task_logger
+from celery.exceptions import SoftTimeLimitExceeded
 from contextlib import closing
 from crawler import utils
 import requests
@@ -12,13 +14,13 @@ import logging
 
 
 logger = get_task_logger(__name__)
-logging.getLogger('neo4j.bolt').setLevel(logging.WARN)
 logging.getLogger('requests').setLevel(logging.WARN)
 
 app = Celery('tasks')
 app.config_from_object('crawler.celeryconfig')
 
 
+"""
 @app.task(bind=True, rate_limit=0.1, max_retries=None)
 def search(self, text, count=100):
     api = utils.get_twitter_api()
@@ -30,64 +32,89 @@ def search(self, text, count=100):
             'while retrieving page %d of search query "%s"', page, text
         )
         raise self.retry(countdown=15*60)
+"""
 
 
-@app.task(rate_limit=0.1)
-def expand_tweet(tweet):
-    api = utils.get_twitter_api()
+@app.task(bind=True) #rate_limit=0.1)
+def expand_tweet(self, tweet):
+    api = utils.get_twitter_api(wait_on_rate_limit=False)
     if not isinstance(tweet, tweepy.models.Status):
-        tweet = api.get_status(tweet)
+        try:
+            tweet = api.get_status(tweet)
+        except tweepy.RateLimitError:
+            raise self.retry(timeout=16*60 + random.randint(1, 5*60))
 
     if hasattr(tweet, 'retweeted_status'):
-        utils.add_tweet(tweet)
         requests.put(
             utils.get_es_url('tweet', tweet.id_str), data=json.dumps(tweet._json)
         ).raise_for_status()
-        expand_tweet.delay(tweet.retweeted_status.id_str, tweet.retweeted_status.id_str)
+        expand_tweet.delay(tweet.retweeted_status.id_str)
         return
 
-    rts = api.retweets(tweet.id_str, count=100)
-    logger.info('got %d retweets for tweet %s', len(rts), tweet.id_str)
-    with closing(utils.get_neo4j_session()) as graph:
-        utils.add_tweet(tweet, graph)
-        requests.put(
-            utils.get_es_url('tweet', tweet.id_str), data=json.dumps(tweet._json)
-        ).raise_for_status()
+    try:
+        rts = api.retweets(tweet.id_str, count=100)
+    except tweepy.RateLimitError:
+        raise self.retry(timeout=16*60 + random.randint(1, 5*60))
 
-        for each in rts:
-            utils.add_tweet(each, graph)
-            requests.put(
-                utils.get_es_url('tweet', each.id_str), data=json.dumps(tweet._json)
-            ).raise_for_status()
-            utils.add_relation(tweet.id_str, each.id_str, 'retweet', graph)
+    logger.info('got %d retweets for tweet %s', len(rts), tweet.id_str)
+    requests.put(
+        utils.get_es_url('tweet', tweet.id_str), data=json.dumps(tweet._json)
+    ).raise_for_status()
+
+    for each in rts:
+        requests.put(
+            utils.get_es_url('tweet', each.id_str), data=json.dumps(tweet._json)
+        ).raise_for_status()
 
     return tweet.id_str
 
 
-def get_user_timeline(user):
+def get_user_timeline(user, count=3200):
     api = utils.get_twitter_api()
 
-    timeline, done, max_id = [], False, None
+    count = min(count, 3200)
+    done, max_id = False, None
     while not done:
-        logger.debug('getting timeline for %s until %s', user, max_id)
-        kwargs = dict(user_id=user, include_rts=1, count=200)
+        logger.info('getting timeline for %s until %s', user, max_id)
+        kwargs = dict(user_id=user, include_rts=1, count=min(200, count))
         if max_id:
             kwargs['max_id'] = str(max_id)
 
         res = api.user_timeline(**kwargs)
 
-        done = not bool(res) or len(timeline) >= 3200
+        done = True
+        for tweet in res:
+            count -= 1
+            if count < 0:
+                done = True
+                break
+            else:
+                done = False
+                yield tweet
+            max_id = min(tweet.id_str, max_id) if max_id else tweet.id_str
+
+
+def search(query, count=0):
+    api = utils.get_twitter_api()
+
+    timeline, done, max_id = [], False, None
+    while not done:
+        print 'getting tweets for %s until %s' % (query, max_id)
+        kwargs = dict(q=query, result_type='mixed', count=100, include_entities=True)
+        if max_id:
+            kwargs['max_id'] = str(max_id)
+
+        res = api.search(**kwargs)
+
+        done = not bool(res) or (count > 0 and len(res) >= count)
         max_id = min(int(t.id_str) for t in res) - 1
-        timeline.extend(res)
-
-        print len(set(t.id_str for t in timeline))
-
-    return timeline
+        for tweet in res:
+            yield tweet
 
 
 @app.task()
 def analyze_user(user):
-    timeline = get_user_timeline(user)
+    timeline = list(get_user_timeline(user))
 
     retweets = len([t for t in timeline if t.retweeted])
     followers = timeline[0].user.followers_count
@@ -101,6 +128,41 @@ def analyze_user(user):
     logger.info('more stats for %s - retweets %d followers %d followees %d',
                 str(user), retweets, followers, followees)
 
+
+@app.task(bind=True)
+def expand_user_of_tweets(self, tweets):
+    # rationale: we don't want consumers to waste time calling
+    # this task for each tweet, but, on the other hand, we don't
+    # want to have long running tasks
+    if isinstance(tweets, list):
+        for tweet in tweets:
+            expand_user_of_tweets.delay(tweet)
+        return
+    else:
+        tweet = tweets
+
+    tweet_es_url = utils.get_es_url('tweet', tweet)
+    r = requests.get(tweet_es_url)
+    if not r.ok:
+        return
+
+    user_data = r.json()['_source']['user']
+    user_id = user_data['id_str']
+
+    timeline_ids = []
+    try:
+        for i, tweet in enumerate(get_user_timeline(user_id, count=400)):
+            if i % 4 == 0:
+                SimpleStreamListener.get_task().delay(tweet._json, expand_rt=False)
+                timeline_ids.append(tweet.id_str)
+    except tweepy.RateLimitError:
+        pass  # too bad
+    except SoftTimeLimitExceeded:
+        pass
+
+    user_data['timeline'] = timeline_ids
+    user_es_url = utils.get_es_url('user', user_id)
+    requests.put(user_es_url, data=json.dumps(user_data))
 
 
 class BaseStreamListener(app.Task, tweepy.StreamListener):
@@ -138,8 +200,13 @@ class BaseStreamListener(app.Task, tweepy.StreamListener):
         while forever and not listener.must_stop:
             track = listener.get_query() or track
             assert track is not None, 'forgot to set stream filter'
-            #listener.stream.filter(languages=languages or ['en'], track=track)
-            listener.stream.filter(track=track)
+            try:
+                listener.stream.filter(languages=languages or ['en'], track=track)
+            except KeyboardInterrupt:
+                forever = False
+            except:
+                import traceback
+                traceback.print_exc()
             print 'RESET'
 
     def run(self, status):
@@ -164,7 +231,7 @@ class BaseStreamListener(app.Task, tweepy.StreamListener):
 class SimpleStreamListener(BaseStreamListener):
     """
     given a query, listens to the stream and saves every tweet in
-    es/neo4j. the source tweet of a retweet is retrieved, as well
+    es. the source tweet of a retweet is retrieved, as well
     """
     ignore_result = True
 
@@ -172,31 +239,43 @@ class SimpleStreamListener(BaseStreamListener):
         BaseStreamListener.__init__(self)
         self.session = requests.Session()
 
-    def run(self, status):
+    @staticmethod
+    def get_task():
+        # quite an ugly hack
+        return app.tasks['crawler.tasks.SimpleStreamListener']
+
+    def run(self, status, expand_rt=True):
         self.logger.info('starting task')
-        with closing(utils.get_neo4j_session()) as graph:
-            utils.add_tweet(status['id_str'])
-            self.session.put(
-                utils.get_es_url('tweet', status['id_str']), data=json.dumps(status)
-            ).raise_for_status()
+        es_url = utils.get_es_url('tweet', status['id_str'])
+        if self.session.head(es_url).status_code == 200:
+            return
 
-            self.logger.debug('got tweet %s: %s', status['id_str'], status['text'])
+        self.session.put(
+            es_url, data=json.dumps(status)
+        ).raise_for_status()
 
-            if 'retweeted_status' in status:
-                original_id = status['retweeted_status']['id_str']
-                utils.add_relation(original_id, status['id_str'], 'retweet', graph)
-                utils.add_tweet(original_id, graph)
+        self.logger.debug('got tweet %s: %s', status['id_str'], status['text'])
 
-                es_url = utils.get_es_url('tweet', original_id)
-                if self.session.head(es_url).status_code == 404:
+        if expand_rt and 'retweeted_status' in status:
+            original_id = status['retweeted_status']['id_str']
+
+            es_url = utils.get_es_url('tweet', original_id)
+            if self.session.head(es_url).status_code == 404:
+                try:
                     original = self.api.get_status(original_id)
+                except tweepy.RateLimitError:
+                    raise self.retry(countdown=15*60 + random.randint(1, 6*60))
+                except tweepy.TweepError as exc:
+                    if exc.api_code != 144:  # "No status found with that ID"
+                        raise
 
-                    self.session.put(
-                        utils.get_es_url('tweet', original_id), data=json.dumps(original._json)
-                    ).raise_for_status()
+                self.session.put(
+                    utils.get_es_url('tweet', original_id),
+                    data=json.dumps(original._json)
+                ).raise_for_status()
 
-                    self.logger.debug('fetched original tweet %s of retweet %s',
-                                      original_id, status['id_str'])
+                self.logger.debug('fetched original tweet %s of retweet %s',
+                                  original_id, status['id_str'])
 
 
 class TrendingStreamListener(SimpleStreamListener):
@@ -231,20 +310,26 @@ class TrendingStreamListener(SimpleStreamListener):
 
 
 class InterestingStuffStreamListener(SimpleStreamListener):
+    """
+    Adaptively finds and stores the most retweeted trending stories
+    """
     RETWEETS_SET_KEY = 'interesting-retweets-list'
     SAVED_COUNT_KEY = 'interesting-saved'
     MIN_RETWEETS_KEY = 'interesting-min-retweets'
 
-    TOP_RETWEET_PERCENT = 15
-    MAX_RETWEET_THRESHOLD = 15
+    TOP_RETWEET_PERCENT = 25
+    MAX_RETWEET_THRESHOLD = 5
     STATS_UPDATE_INTERVAL = 50  # tweets
 
+    MAX_TIME_ON_TOPIC = 15 * 60
+    
     def __init__(self):
         SimpleStreamListener.__init__(self)
         self.redis = utils.get_redis()
         self.redis.set(self.SAVED_COUNT_KEY, 0)
-        self.redis.set(self.MIN_RETWEETS_KEY, 1)
-        self.update_in_progress = False
+        self.min_retweets = 1
+        self.last_update = None
+        self.updating = False
 
         self.pbar = progressbar.ProgressBar(
             max_value=progressbar.UnknownLength,
@@ -268,14 +353,25 @@ class InterestingStuffStreamListener(SimpleStreamListener):
                 utils.FlexibleDynamicMessage(
                     kwarg_name='top',
                     label='Top %d%%' % self.TOP_RETWEET_PERCENT,
-                    format_defined='{label}: {rts:.3g} RTs ({rounding} - {round_down:.3g}%/{round_up:.3g}%)',
+                    format_defined='{label}: {rts:.3g} RTs ({rounding} - ' \
+                                   '{round_down:.3g}%/{round_up:.3g}%)',
                     format_undefined='{label}: ------'
                 ),
             ]
         )
 
+    @property
+    def min_retweets(self):
+        return int(self.redis.get(self.MIN_RETWEETS_KEY))
+
+    @min_retweets.setter
+    def min_retweets(self, value):
+        self.redis.set(self.MIN_RETWEETS_KEY, int(value))
+
     def get_query(self):
-        self.redis.delete(self.RETWEETS_SET_KEY)
+        if not self.last_update:
+            self.finalize_batch()
+            self.last_update = datetime.datetime.now()
 
         places = [
             1,
@@ -283,7 +379,7 @@ class InterestingStuffStreamListener(SimpleStreamListener):
             23424977,   # USA
             23424748,   # Australia
             23424916,   # New Zealand
-        ] + [place['woeid'] for place in self.api.trends_available()]
+        ] #+ [place['woeid'] for place in self.api.trends_available()]
 
         trends = []
         try:
@@ -299,7 +395,14 @@ class InterestingStuffStreamListener(SimpleStreamListener):
             trends, key=lambda t: t['tweet_volume'], reverse=True
         )[:400]
         track = [urllib.unquote(t['query']) for t in trends]
-        print 'will listen to %d trending topics' % len(trends)
+
+        reef = [
+            "great", "reef", "barrier", "GreatBarrier",
+            "BarrierReef", "GreatBarrierReef", 
+        ]
+        track = track[:400 - len(reef)] #+ reef
+        print 'will listen to %d trending topics' % len(track)
+        self.updating = False
 
         return track
 
@@ -310,26 +413,34 @@ class InterestingStuffStreamListener(SimpleStreamListener):
         if orig_tweet_id:
             orig_retweets = self.redis.zincrby(self.RETWEETS_SET_KEY, orig_tweet_id, 1)
 
-        min_rts = int(self.redis.get(self.MIN_RETWEETS_KEY))
-        if orig_retweets >= min_rts:
+        if orig_retweets >= self.min_retweets:
             self.redis.incr(self.SAVED_COUNT_KEY)
             SimpleStreamListener.run(self, status)
             status = 'SAVED'
         else:
             status = 'SKIPPED'
 
-        logger.info('tweet %s retweeted %d times, threshold is %d, %s',
-                    orig_tweet_id, orig_retweets, min_rts, status)
+        return status == 'SAVED'
 
     def on_status(self, status):
         if self.count and self.count % self.STATS_UPDATE_INTERVAL == 0:
             min_rts = self.update_statistics()
-            if min_rts > self.MAX_RETWEET_THRESHOLD and not self.update_in_progress:
-                print 'reached threshold, resetting'
-                self.update_in_progress = True
-                self.stream.disconnect()
+            now = datetime.datetime.now()
+            since_update = (now - self.last_update).total_seconds()
+            if (min_rts > self.MAX_RETWEET_THRESHOLD or
+                    since_update > self.MAX_TIME_ON_TOPIC):
+                self.finalize_batch()
+                return False
 
         super(InterestingStuffStreamListener, self).on_status(status)
+
+    def finalize_batch(self):
+        print 'flushing tweets'
+        rts = self.redis.zrangebyscore(self.RETWEETS_SET_KEY,
+                                       self.min_retweets, '+infinity')
+        if rts:
+            expand_user_of_tweets.delay(rts[:10])
+        self.redis.delete(self.RETWEETS_SET_KEY)
 
     def update_statistics(self):
         num_tweets = self.redis.zcard(self.RETWEETS_SET_KEY)
@@ -354,7 +465,9 @@ class InterestingStuffStreamListener(SimpleStreamListener):
         )
 
         # choose the rounding so as to be closest to the given percentage
-        if self.TOP_RETWEET_PERCENT - pcent_rounded_up < pcent_rounded_down - self.TOP_RETWEET_PERCENT:
+        dist_up = self.TOP_RETWEET_PERCENT - pcent_rounded_up 
+        dist_down = pcent_rounded_down - self.TOP_RETWEET_PERCENT
+        if dist_up < dist_down:
             min_rts = scores[int(top_k_pcentile)] + 1
             rounding = 'U'
         else:
@@ -362,7 +475,7 @@ class InterestingStuffStreamListener(SimpleStreamListener):
             rounding = 'D'
 
         assert int(min_rts) > 0  # shouldn't happen, right?
-        self.redis.set(self.MIN_RETWEETS_KEY, int(min_rts))
+        self.min_retweets = min_rts
 
         # update progress bar
         saved = self.redis.get(self.SAVED_COUNT_KEY)

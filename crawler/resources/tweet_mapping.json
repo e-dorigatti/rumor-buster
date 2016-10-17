@@ -1,0 +1,33 @@
+{
+    "tweet": {
+        "properties": {
+            "dynamic_templates": [
+                {
+                    "tweet_text": {
+                        "match": "text",
+                        "mapping": {
+                        }
+                    }
+                },
+                {
+                    "default_str": {
+                        "match": "*",
+                        "match_mapping_type": "string",
+                        "mapping": {
+                            "index": "not_analyzed",
+                            "doc_values": true
+                        }
+                    }
+                },
+                {
+                    "default_other": {
+                        "match": "*",
+                        "mapping": {
+                            "doc_values": true
+                        }
+                    }
+                }
+            ]
+        }
+    }
+}

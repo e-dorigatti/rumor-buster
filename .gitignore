@@ -3,6 +3,7 @@
 secrets.py
 .idea/
 .idea/
+dev/
 tweepydata/
 redisdata/
 esdata/

@@ -56,5 +56,14 @@ def interesting(language):
     tasks.InterestingStuffStreamListener.start(languages=language)
 
 
+@crawl.command()
+@click.argument('query', nargs=-1)
+def search(query):
+    task = tasks.app.tasks['crawler.tasks.SimpleStreamListener']
+    for tweet in tasks.search(query):
+        task.delay(tweet._json)
+        print 'scheduled', tweet.id_str
+
+
 if __name__ == '__main__':
     crawl()
