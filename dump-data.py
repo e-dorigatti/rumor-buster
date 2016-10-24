@@ -7,16 +7,34 @@ from elasticsearch.helpers import scan
 
 @click.command()
 @click.argument('out-file', type=click.File('w'))
+@click.option('-q', '--query', multiple=True)
 @click.option('-i', '--index', default='tweets')
 @click.option('-t', '--doc-type', default='tweet')
 @click.option('-h', '--host', default='localhost')
 @click.option('-p', '--port', default=9200)
-def main(out_file, index, doc_type, host, port):
-    es = elasticsearch.Elasticsearch(host=host, port=port)
-    count = es.count(index=index, doc_type=doc_type)
+def main(out_file, query, index, doc_type, host, port):
+    if query:
+        should_clause = [{'match': {'text': word}} for word in query]
+    else:
+        should_clause = [{'match_all': {}}]
 
-    with ProgressBar(max_value=count['count']) as bar:
-        for i, each in enumerate(scan(es, index=index, doc_type=doc_type)):
+    query = {
+        'query': {
+            'bool': {
+                'filter': {
+                    'bool': {
+                        'should': should_clause
+                    }
+                }
+            }
+        }
+    }
+
+    es = elasticsearch.Elasticsearch(host=host, port=port)
+    res = es.search(body=query, index=index, doc_type=doc_type, size=0)
+
+    with ProgressBar(max_value=res['hits']['total']) as bar:
+        for i, each in enumerate(scan(es, query=query, index=index, doc_type=doc_type)):
             out_file.write(json.dumps(each))
             out_file.write('\n')
             bar.update(i)

@@ -1,5 +1,5 @@
-import tweepy
 import requests
+import twitter
 import settings
 import redis
 import secrets
@@ -7,13 +7,20 @@ import json
 from progressbar import widgets
 
 
-def get_twitter_api(**api_kwargs):
-    cache = api_kwargs.pop('cache', tweepy.FileCache(settings.TWEEPY_CACHE, timeout=-1))
-    wait_on_rate_limit = api_kwargs.pop('wait_on_rate_limit', True)
+def get_twitter_stream():
+    stream = twitter.TwitterStream(auth=twitter.OAuth(
+        token=secrets.access_token, token_secret=secrets.token_secret,
+        consumer_key=secrets.consumer_key, consumer_secret=secrets.consumer_secret
+    ))
 
-    auth = tweepy.OAuthHandler(secrets.consumer_key, secrets.consumer_secret)
-    auth.set_access_token(secrets.access_token, secrets.token_secret)
-    api = tweepy.API(auth, cache=cache, wait_on_rate_limit=wait_on_rate_limit, **api_kwargs)
+    return stream
+
+
+def get_twitter_api():
+    api = twitter.Twitter(auth=twitter.OAuth(
+        token=secrets.access_token, token_secret=secrets.token_secret,
+        consumer_key=secrets.consumer_key, consumer_secret=secrets.consumer_secret
+    ))
 
     return api
 
