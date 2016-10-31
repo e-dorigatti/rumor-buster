@@ -1,43 +1,46 @@
 {
-    "settings": {
-        "analysis": {
-          "filter": {
-            "stemmer": {
-              "type":     "hunspell",
-              "language": "en_US" 
-            }
-          },
-          "analyzer": {
-            "lowercase_stemmed": {
-              "tokenizer":  "standard",
-              "filter":   ["lowercase", "stemmer"]
-            }
+  "mappings": {
+    "tweet": {
+      "dynamic_templates": [
+        {
+          "tweet_text": {
+            "mapping": {
+              "analyzer": "lowercase_stemmed"
+            },
+            "match": "text"
+          }
+        },
+        {
+          "default_str": {
+            "mapping": {
+              "doc_values": true,
+              "index": "not_analyzed",
+              "type": "string"
+            },
+            "match_mapping_type": "string",
+            "match": "*"
           }
         }
-    },
-    "mappings": {
-        "tweet": {
-            "dynamic_templates": [
-                {
-                    "tweet_text": {
-                        "match": "text",
-                        "mapping": {
-                            "analyzer": "lowercase_stemmed"
-                        }
-                    }
-                },
-                {
-                    "default_str": {
-                        "match": "*",
-                        "match_mapping_type": "string",
-                        "mapping": {
-                            "type": "string",
-                            "index": "not_analyzed",
-                            "doc_values": true
-                        }
-                    }
-                }
-            ]
-        }
+      ]
     }
+  },
+  "settings": {
+    "analysis": {
+      "analyzer": {
+        "lowercase_stemmed": {
+          "filter": [
+            "lowercase",
+            "stemmer"
+          ],
+          "tokenizer": "standard"
+        }
+      },
+      "filter": {
+        "stemmer": {
+          "name": "porter2",
+          "type": "stemmer"
+        }
+      }
+    }
+  }
 }
