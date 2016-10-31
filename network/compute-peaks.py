@@ -28,16 +28,12 @@ class Program:  # such java :(
     src = 'http://localhost:9200/tweets/tweet'
     sample = -0.1
     partitions = -1
-    co_occurrences = 2
     bucket_width = 4.0
     peaks_lag = 3
     peaks_diff_stdev = 2.5
     peaks_diff_min = 150
     peaks_influence = 0.01
     out_file = 'peaks.jsonl'
-    lemma_to_word = 'lemma-to-word.json'
-    jaccard_buckets = 50
-    participation_buckets = 50
 
     # why the fuck an UTC datetime should NOT BE localized
     epoch = pytz.utc.localize(datetime.datetime.utcfromtimestamp(0))
@@ -91,20 +87,21 @@ class Program:  # such java :(
             text = tweet['text']
             remove = []
             counters = defaultdict(int)
+            words = set()
 
             for hashtag in tweet['entities']['hashtags']:
-                counters['#' + hashtag['text']] += 1
+                htag = '#' + hashtag['text']
+                words.add((htag, htag))
                 remove.append(hashtag['indices'])
 
             for user in tweet['entities']['user_mentions']:
-                counters['@' + user['screen_name']] += 1
+                us = '@' + user['screen_name']
                 remove.append(user['indices'])
 
             for url in tweet['entities']['urls']:
                 if not url['expanded_url']:
                     continue
                 remove.append(url['indices'])
-                counters[url['expanded_url']] += 1
 
             # remove urls, hashtags and user mentions from the text
             skipped = 0
@@ -118,24 +115,23 @@ class Program:  # such java :(
                 text = text[3:]
 
             text = text.lower().strip()
-            words = set([
+            words.update(set([
                 (tag.lemma, tag.word) for tag in make_tags(tagger.tag_text(text))
                 if (
                     hasattr(tag, 'lemma')
-                    and tag.pos[0] == 'N'
+                    and (tag.pos[0] == 'N' or tag.pos[0] == 'V')
                     and tag.lemma != '<unknown>'
                     and len(tag.lemma) > 1
                 )
-            ])
+            ]))
 
-            # word co-occurrences
-            counters = defaultdict(int)
-            for comb in itertools.combinations(words, self.co_occurrences):
-                lemmas = sorted(w[0] for w in comb)
-                counters[tuple(lemmas)] += 1
+            # words co-occurrences
+            for i in xrange(1, 10):
+                for comb in itertools.combinations(words, i):
+                    lemmas = sorted(w[0] for w in comb)
+                    counters[tuple(lemmas)] += 1
 
             result = {
-                'lemma-to-word': words,
                 'counters': counters,
             }
 
@@ -189,12 +185,6 @@ class Program:  # such java :(
             .flatMapValues(self.detect_peaks)
             .groupByKey()
         ).collect()
-
-        lemma_to_word = dict((tweets_rdd
-            .flatMap(lambda (_, r): r['lemma-to-word'])
-            .groupByKey()
-            .mapValues(set)
-        ).collect())
 
         print 'Dumping results'
         with open(self.out_file, 'w') as f:
