@@ -9,3 +9,5 @@ redisdata/
 esdata/
 neo4jdata/
 rabbitmqdata/
+*.json[l]
+*.zip

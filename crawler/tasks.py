@@ -8,7 +8,10 @@ from celery.exceptions import SoftTimeLimitExceeded
 from contextlib import closing
 from crawler import utils
 import requests
-import json
+try:
+    import ujson as json
+except ImportError:
+    import json
 import progressbar
 import urllib
 import datetime
@@ -25,7 +28,7 @@ app.config_from_object('crawler.celeryconfig')
 @app.task(bind=True) #rate_limit=0.1)
 def expand_tweet(self, tweet):
     api = utils.get_twitter_api()
-    tweet = api.statuses.show(id=tweet)
+    tweet = utils.api_call(api.statuses.show, id=tweet)
 
     if 'retweeted_status' in tweet:
         requests.put(
@@ -35,7 +38,7 @@ def expand_tweet(self, tweet):
         return
 
     try:
-        rts = api.statuses.retweets(id=tweet['id_str'], count=100)
+        rts = utils.api_call(api.statuses.retweets, id=tweet['id_str'], count=100)
     except twitter.TwitterHTTPError as exc:
         if exc.e.code == 429:
             raise self.retry(countdown=15*60 + random.randint(1, 6*60))
@@ -66,7 +69,7 @@ def get_user_timeline(user, count=3200):
         if max_id:
             kwargs['max_id'] = str(max_id)
 
-        res = api.statuses.user_timeline(**kwargs)
+        res = utils.api_call(api.statuses.user_timeline, **kwargs)
 
         done = True
         for tweet in res:
@@ -91,7 +94,7 @@ def search(query, count=0):
         if max_id:
             kwargs['max_id'] = str(max_id)
 
-        res = api.search.tweets(**kwargs)['statuses']
+        res = utils.api_call(api.search.tweets, **kwargs)['statuses']
         retrieved += len(res)
 
         done = not bool(res) or (count > 0 and retrieved >= count)
@@ -117,7 +120,7 @@ def analyze_user(user):
                 str(user), retweets, followers, followees)
 
 
-@app.task(bind=True)
+@app.task(bind=True, max_retries=None)
 def expand_user_of_tweets(self, tweets):
     # rationale: we don't want consumers to waste time calling
     # this task for each tweet, but, on the other hand, we don't
@@ -145,6 +148,8 @@ def expand_user_of_tweets(self, tweets):
                 timeline_ids.append(tweet['id_str'])
     except SoftTimeLimitExceeded:
         pass
+    except utils.RateLimitedException:
+        raise self.retry(countdown=15*60 + random.randint(1, 5*60))
 
     user_data['timeline'] = timeline_ids
     user_es_url = utils.get_es_url('user', user_id)
@@ -182,22 +187,39 @@ class BaseStreamListener(app.Task):
         listener.this_task = listener
  
         refresh_track = True
+        retries = 0
         while True:
             if refresh_track:
-                track = listener.get_query() or track
+                try:
+                    track = listener.get_query() or track
+                except:
+                    traceback.print_exc()
+                    print 'Sleeping 60s before refreshing track'
+                    time.sleep(60)
+                    continue
+
                 assert track is not None, 'forgot to set stream filter'
                 refresh_track = False
 
             try:
                 stream = listener.stream.statuses.filter(
-                    track=track, languages=languages
+                    track=track, languages=languages, timeout=90,
                 )
                 for msg in stream:
                     if 'hangup' in msg and msg['hangup']:
                         listener.on_connection_broken(msg)
+                        retries += 1
+                        rest = min(2 * 60, 2**retries)
+                        print 'sleeping %ds...' % rest
+                        time.sleep(rest)
+                    elif 'timeout' in msg and msg['timeout']:
+                        print 'Timeout'
+                        break
                     else:
+                        retries = 0
                         stop = listener.on_status(msg)
                         if stop == False:
+                            print 'STOP'
                             refresh_track = True
                             break
             except KeyboardInterrupt:
@@ -206,8 +228,8 @@ class BaseStreamListener(app.Task):
             except twitter.TwitterHTTPError as exc:
                 if exc.e.code == 420:
                     print exc.response_data
-                    print 'sleeping for 60s...'
-                    time.sleep(60)
+                    print 'sleeping for 5m...'
+                    time.sleep(5 * 60)
                 else:
                     traceback.print_exc()
             except:
@@ -236,40 +258,40 @@ class SimpleStreamListener(BaseStreamListener):
     def __init__(self):
         BaseStreamListener.__init__(self)
         self.session = requests.Session()
+        self.file = open('tweets-temp.jsonl', 'a')
+
+    def __del__(self):
+        self.file.close()
 
     @staticmethod
     def get_task():
         # quite an ugly hack
         return app.tasks['crawler.tasks.SimpleStreamListener']
 
-    def run(self, status, expand_rt=True):
-        self.logger.info('starting task')
-        es_url = utils.get_es_url('tweet', status['id_str'])
-        if self.session.head(es_url).status_code == 200:
-            return
+    def save_tweet(self, status):
+        data = json.dumps(status)
+        self.file.write(data)
+        self.file.write('\n')
 
+        es_url = utils.get_es_url('tweet', status['id_str'])
         self.session.put(
-            es_url, data=json.dumps(status)
+            es_url, data=data
         ).raise_for_status()
 
+    def run(self, status, expand_rt=False):
+        self.logger.info('starting task')
         self.logger.debug('got tweet %s: %s', status['id_str'], status['text'])
+        self.save_tweet(status)
 
         if expand_rt and 'retweeted_status' in status:
             original_id = status['retweeted_status']['id_str']
 
-            es_url = utils.get_es_url('tweet', original_id)
             try:
-                original = self.api.statuses.show(id=original_id)
-            except twitter.TwitterHTTPError as exc:
-                if exc.e.code == 429:
-                    raise self.retry(countdown=15*60 + random.randint(1, 6*60))
-                else:
-                    raise
-            self.session.put(
-                utils.get_es_url('tweet', original_id),
-                data=json.dumps(original)
-            ).raise_for_status()
-
+                original = utils.api_call(self.api.statuses.show, id=original_id)
+            except utils.RateLimitedException as exc:
+                raise self.retry(countdown=15*60 + random.randint(1, 6*60))
+            
+            self.save_tweet(original)
             self.logger.debug('fetched original tweet %s of retweet %s',
                               original_id, status['id_str'])
 
@@ -287,7 +309,8 @@ class TrendingStreamListener(SimpleStreamListener):
         self.update_in_progress = False
 
     def get_query(self):
-        trending = sorted(self.api.trends.place(_id=1)[0]['trends'],
+        trends = utils.api_call(self.api.trends.place, _id=1)
+        trending = sorted(trends[0]['trends'],
                           key=lambda t: t['tweet_volume'],
                           reverse=True)[:3]
         track = [urllib.unquote(t['query']) for t in trending]
@@ -313,9 +336,9 @@ class InterestingStuffStreamListener(SimpleStreamListener):
     SAVED_COUNT_KEY = 'interesting-saved'
     MIN_RETWEETS_KEY = 'interesting-min-retweets'
 
-    TOP_RETWEET_PERCENT = 5
+    TOP_RETWEET_PERCENT = 15
     MAX_RETWEET_THRESHOLD = 6
-    STATS_UPDATE_INTERVAL = 100  # tweets
+    STATS_UPDATE_INTERVAL = 50  # tweets
 
     MAX_TIME_ON_TOPIC = 5 * 60
     
@@ -397,7 +420,7 @@ class InterestingStuffStreamListener(SimpleStreamListener):
                 "reef", "barrier", "GreatBarrier",
                 "BarrierReef", "GreatBarrierReef", 
             ]
-            track = track + reef
+            track = track #+ reef
             self.updating = False
 
             print 'refreshed trending topics'
@@ -435,6 +458,7 @@ class InterestingStuffStreamListener(SimpleStreamListener):
                 self.finalize_batch()
                 self.last_update = None
                 self.track = None
+                print 'Retweet threshold exceeded'
                 return False
 
         super(InterestingStuffStreamListener, self).on_status(status)

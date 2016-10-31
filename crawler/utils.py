@@ -1,4 +1,5 @@
 import requests
+import hashlib
 import twitter
 import settings
 import redis
@@ -23,6 +24,47 @@ def get_twitter_api():
     ))
 
     return api
+
+
+class RateLimitedException(Exception):
+    def __init__(self, ttl):
+        self.ttl = ttl
+
+    def __str__(self):
+        return 'rate limited, time left: %d' % self.ttl
+
+
+def api_call(method, *args, **kwargs):
+    rate_limit_key = 'twitter-apis-rate-limited'
+    rs = get_redis()
+
+    ttl = rs.ttl(rate_limit_key)
+    assert ttl != '-1'
+    
+    if ttl >= 0:
+        raise RateLimitedException(ttl)
+
+    cache_key = 'api-cache-%s' % hashlib.sha512(
+        json.dumps({'meth': method.uriparts, 'args': args, 'kwargs': kwargs})
+    ).hexdigest()
+    res = rs.get(cache_key)
+    if res is not None:
+        return json.loads(res)
+
+    try:
+        res = method(*args, **kwargs)
+        rs.set(cache_key, json.dumps(res))
+        rs.expire(cache_key, 24 * 60 * 60)
+        return res
+    except twitter.TwitterHTTPError as exc:
+        if exc.e.code == 429:
+            rs.set(rate_limit_key, 1)
+            rs.expire(rate_limit_key, 15 * 60)
+            raise RateLimitedException(15 * 60)
+        else:
+            raise
+    except:
+        raise
 
 
 def get_redis():

@@ -1,6 +1,6 @@
 ES_HOST = 'http://localhost:9200'
 ES_TWEET_INDEX = 'tweets'
-ES_TWEET_INDEX = 'new_tweets'
+ES_TWEET_INDEX = 'tweets-v3'
 ES_TWEET_DOCTYPE = 'tweet'
 ES_USER_INDEX = 'users'
 ES_USER_DOCTYPE = 'user'
