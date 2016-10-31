@@ -33,7 +33,12 @@ class Program:  # such java :(
     peaks_diff_stdev = 2.5
     peaks_diff_min = 150
     peaks_influence = 0.01
+    nwords_max = 10
     out_file = 'peaks.jsonl'
+    include_hashtags = True
+    include_verbs = False
+    include_adverbs = False
+    include_adjectives = False
 
     # why the fuck an UTC datetime should NOT BE localized
     epoch = pytz.utc.localize(datetime.datetime.utcfromtimestamp(0))
@@ -119,14 +124,22 @@ class Program:  # such java :(
                 (tag.lemma, tag.word) for tag in make_tags(tagger.tag_text(text))
                 if (
                     hasattr(tag, 'lemma')
-                    and (tag.pos[0] == 'N' or tag.pos[0] == 'V')
                     and tag.lemma != '<unknown>'
                     and len(tag.lemma) > 1
+                    and (tag.pos[0] == 'N'            # noun
+                        or (self.include_verbs and tag.pos.startswith('VV'))
+                        or (self.include_adverbs and tag.pos.startswith('RB'))
+                        or (self.include_adjectives and tag.pos.startswith('JJ'))
+                    )
+                    and (tag.lemma != 'amp' and tag.word != 'amp')  # &amp
                 )
             ]))
 
             # words co-occurrences
-            for i in xrange(1, 10):
+            if not self.include_hashtags:
+                counters = defaultdict(int)
+
+            for i in xrange(1, self.nwords_max + 1):
                 for comb in itertools.combinations(words, i):
                     lemmas = sorted(w[0] for w in comb)
                     counters[tuple(lemmas)] += 1
@@ -165,11 +178,12 @@ class Program:  # such java :(
                 .map(lambda t: t.get('_source', t))
             )
 
-        if self.sample > 0.0:
-            tweets_rdd = tweets_rdd.filter(lambda _: random.random() < self.sample)
-
         if self.partitions > 0:
             tweets_rdd = tweets_rdd.repartition(self.partitions)
+
+        tweets_rdd = tweets_rdd.filter(lambda t: t['lang'] == 'en')
+        if self.sample > 0.0:
+            tweets_rdd = tweets_rdd.filter(lambda _: random.random() < self.sample)
 
         tweets_rdd = (tweets_rdd
             .keyBy(self.bucket_for)
@@ -204,7 +218,12 @@ class Program:  # such java :(
             name, value = re.split(r':|=', arg)
             name = name.replace('-', '_')
             type_ = type(getattr(prog, name))
-            parsed = type_(value) if type_ is not type(None) else value
+            if type_ == bool:
+                parsed = value.lower() in {'t', 'true', 'y', 'yes'}
+            elif type_ is not type(None):
+                parsed = type_(value)
+            else:
+                parsed = value
             setattr(prog, name, parsed)
         return prog
 
