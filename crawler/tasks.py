@@ -258,10 +258,8 @@ class SimpleStreamListener(BaseStreamListener):
     def __init__(self):
         BaseStreamListener.__init__(self)
         self.session = requests.Session()
-        self.file = open('tweets-temp.jsonl', 'a')
 
     def __del__(self):
-        self.file.close()
 
     @staticmethod
     def get_task():
@@ -270,8 +268,6 @@ class SimpleStreamListener(BaseStreamListener):
 
     def save_tweet(self, status):
         data = json.dumps(status)
-        self.file.write(data)
-        self.file.write('\n')
 
         es_url = utils.get_es_url('tweet', status['id_str'])
         self.session.put(

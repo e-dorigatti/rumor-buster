@@ -5,7 +5,12 @@
         {
           "tweet_text": {
             "mapping": {
-              "analyzer": "lowercase_stemmed"
+              "analyzer": "lowercase_stemmed",
+              "fields": {
+                "raw": {
+                  "type": "string"
+                }
+              }
             },
             "match": "text"
           }
