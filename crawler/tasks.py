@@ -6,7 +6,7 @@ import random
 from celery.utils.log import get_task_logger
 from celery.exceptions import SoftTimeLimitExceeded
 from contextlib import closing
-from crawler import utils
+import utils
 import requests
 try:
     import ujson as json
@@ -22,7 +22,7 @@ logger = get_task_logger(__name__)
 logging.getLogger('requests').setLevel(logging.WARN)
 
 app = Celery('tasks')
-app.config_from_object('crawler.celeryconfig')
+app.config_from_object('celeryconfig')
 
 
 @app.task(bind=True) #rate_limit=0.1)
@@ -258,8 +258,6 @@ class SimpleStreamListener(BaseStreamListener):
     def __init__(self):
         BaseStreamListener.__init__(self)
         self.session = requests.Session()
-
-    def __del__(self):
 
     @staticmethod
     def get_task():

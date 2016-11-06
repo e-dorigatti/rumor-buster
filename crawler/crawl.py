@@ -1,6 +1,6 @@
 import click
 import logging
-from crawler import tasks
+import tasks
 
 
 @click.group()
