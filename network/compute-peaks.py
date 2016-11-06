@@ -59,13 +59,14 @@ class Program:  # such java :(
             if i == 0:
                 mean = y
                 stdev = 0
-            elif (i < self.peaks_lag or (y < mean + self.peaks_diff_stdev * stdev or
-                    self.peaks_diff_min <= 0 or abs(y - mean) < self.peaks_diff_min)):
-
+            elif i < self.peaks_lag or (y < mean + self.peaks_diff_stdev * stdev):
                 stdev = (stdev + math.sqrt((y - mean)**2)) / 2
                 mean = (mean + y) / 2
                 if cur_peak:
-                    yield [buckets[i] for i in cur_peak], counts
+                    _min = min(values[i] for i in cur_peak)
+                    _max = max(values[i] for i in cur_peak)
+                    if _max - _min >= self.peaks_diff_min:
+                        yield [buckets[i] for i in cur_peak], counts
                     cur_peak = None
             else:
                 stdev = ((stdev + self.peaks_influence * math.sqrt((y - mean)**2)) /
@@ -76,7 +77,10 @@ class Program:  # such java :(
                 cur_peak.append(i)
 
         if cur_peak:
-            yield [buckets[i] for i in cur_peak], counts
+            _min = min(values[i] for i in cur_peak)
+            _max = max(values[i] for i in cur_peak)
+            if _max - _min >= self.peaks_diff_min:
+                yield [buckets[i] for i in cur_peak], counts
 
     def compute_co_occurrences(self, partition):
         """
