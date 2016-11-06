@@ -7,28 +7,26 @@ from elasticsearch.helpers import scan
 
 @click.command()
 @click.argument('out-file', type=click.File('w'))
-@click.option('-q', '--query', multiple=True)
+@click.option('-q', '--query')
 @click.option('-i', '--index', default='tweets')
 @click.option('-t', '--doc-type', default='tweet')
 @click.option('-h', '--host', default='localhost')
 @click.option('-p', '--port', default=9200)
 def main(out_file, query, index, doc_type, host, port):
     if query:
-        should_clause = [{'match': {'text': word}} for word in query]
+        query = json.loads(query)
     else:
-        should_clause = [{'match_all': {}}]
-
-    query = {
-        'query': {
-            'bool': {
-                'filter': {
-                    'bool': {
-                        'should': should_clause
+        query = {
+            'query': {
+                'bool': {
+                    'filter': {
+                        'bool': {
+                            'should': [['match_all': {}]
+                        }
                     }
                 }
             }
         }
-    }
 
     es = elasticsearch.Elasticsearch(host=host, port=port)
     res = es.search(body=query, index=index, doc_type=doc_type, size=0)
