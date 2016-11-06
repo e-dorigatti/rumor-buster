@@ -1,16 +1,13 @@
-from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from treetaggerpoll import TaggerProcessPoll
 import sys
 import re
 import numpy as np
 import click
-import matplotlib.pyplot as plt
 import sys
 import itertools
 from urlparse import urlparse
 from collections import defaultdict
 from treetaggerwrapper import make_tags, Tag, NotTag, TreeTagger
-from sklearn.feature_extraction.text import TfidfVectorizer
 import pytz
 import datetime
 import math
