@@ -21,7 +21,7 @@ from elasticsearch import Elasticsearch
 from elasticsearch.helpers import scan
 
 
-class Program:  # such java :(
+class Program:
     src = 'http://localhost:9200/tweets/tweet'
     sample = -0.1
     partitions = -1
@@ -30,7 +30,7 @@ class Program:  # such java :(
     peaks_diff_stdev = 2.5
     peaks_diff_min = 150
     peaks_influence = 0.01
-    nwords_max = 10
+    nwords_max = 6
     out_file = 'peaks.jsonl'
     include_hashtags = True
     include_verbs = False
@@ -45,39 +45,75 @@ class Program:  # such java :(
         bucket = int(dt / self.bucket_width)
         return bucket
 
-    def detect_peaks(self, counts):
+    def continuous_intervals(self, counts):
+        counts = sorted(counts, key=lambda (b, _): b)
+
+        i = 0
+        while i < len(counts):
+            j = i + 1
+            while j < len(counts) and counts[j][0] == counts[j - 1][0] + 1:
+                j += 1
+
+            yield counts[i:j]
+            i = j
+
+    def plot_peaks(self, counts, peaks, avg=None, std=None):
+        import matplotlib.pyplot as plt
+        xs, ys = zip(*counts)
+        plt.plot(xs, ys, 'k-')
+
+        if avg:
+            xs, avs, stds = zip(*avg)
+            plt.plot(xs, avs, 'r--')
+            upper = [a + s for a, s in zip(avs, stds)]
+            lower = [max(0, a - s) for a, s in zip(avs, stds)]
+            plt.fill_between(xs, lower, upper, facecolor='red', alpha=0.2)
+
+        for peak in peaks:
+            plt.axvspan(peak[0], peak[-1], color='gray', alpha=0.25)
+
+        plt.tight_layout()
+        plt.show()
+
+    def detect_peaks(self, counts, plot=False):
         counts = list(counts)
         buckets, values = zip(*sorted(counts, key=lambda (b, _): b))
         if len(values) < 4:
             return
 
-        cur_peak = mean = stdev = None
+        mean = stdev = None
+        avg, cur_peak, peaks = [], [], []
         for i, y in enumerate(values):
             if i == 0:
                 mean = y
                 stdev = 0
-            elif i < self.peaks_lag or (y < mean + self.peaks_diff_stdev * stdev):
+            elif i < self.peaks_lag or (abs(y - mean) < self.peaks_diff_stdev * stdev):
                 stdev = (stdev + math.sqrt((y - mean)**2)) / 2
                 mean = (mean + y) / 2
                 if cur_peak:
-                    _min = min(values[i] for i in cur_peak)
-                    _max = max(values[i] for i in cur_peak)
-                    if _max - _min >= self.peaks_diff_min:
-                        yield [buckets[i] for i in cur_peak], counts
-                    cur_peak = None
+                    _min = min(values[x] for x in cur_peak)
+                    _max = max(values[x] for x in cur_peak)
+                    if self.peaks_diff_min <= 0 or _max - _min >= self.peaks_diff_min:
+                        peaks.append(([buckets[x] for x in cur_peak], counts))
+                    cur_peak = []
             else:
                 stdev = ((stdev + self.peaks_influence * math.sqrt((y - mean)**2)) /
                         (1 + self.peaks_influence))
                 mean = (mean + self.peaks_influence * y) / (1 + self.peaks_influence)
-                if not cur_peak:
-                    cur_peak = []
                 cur_peak.append(i)
 
+            avg.append((buckets[i], mean, self.peaks_diff_stdev * stdev))
+
         if cur_peak:
-            _min = min(values[i] for i in cur_peak)
-            _max = max(values[i] for i in cur_peak)
-            if _max - _min >= self.peaks_diff_min:
-                yield [buckets[i] for i in cur_peak], counts
+            _min = min(values[x] for x in cur_peak)
+            _max = max(values[x] for x in cur_peak)
+            if self.peaks_diff_min <= 0 or _max - _min >= self.peaks_diff_min:
+                peaks.append(([buckets[x] for x in cur_peak], counts))
+
+        if plot and peaks:
+            self.plot_peaks(peaks[0][1], [p[0] for p in peaks], avg)
+
+        return peaks
 
     def compute_co_occurrences(self, partition):
         """
@@ -197,6 +233,7 @@ class Program:  # such java :(
             .reduceByKey(lambda c1, c2: c1 + c2)
             .map(lambda ((k, b), c): (k, (b, c)))
             .groupByKey()
+            .flatMapValues(self.continuous_intervals)
             .flatMapValues(self.detect_peaks)
             .groupByKey()
         ).collect()
