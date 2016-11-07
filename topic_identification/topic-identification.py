@@ -1,7 +1,7 @@
+import matplotlib.pyplot as plt
 from ahclustering import AHClustering
 import click
 import numpy as np
-import matplotlib.pyplot as plt
 import itertools
 from collections import defaultdict
 import json
@@ -30,6 +30,7 @@ def merge_peaks_by_overlap(keywords, min_overlap, plot=False):
     took = set()
     while i < len(keywords):
         _, ((start, end), _) = keywords[i]
+
         j = i + 1
         while j < len(keywords) and keywords[j][1][0][0] < end:
             _, ((a, b), _) = keywords[j]
@@ -146,7 +147,7 @@ def plot_results(hist, hist_sep, hist_clus, small_words, big_words):
 @click.option('--plot', '-p', is_flag=True)
 @click.option('--size', '-S', type=click.INT, multiple=True)
 @click.option('--connected-components', '-c', is_flag=True)
-@click.option('--shape-clustering', '-s', is_flag=True)
+@click.option('--shape-clustering', '-s', type=click.FLOAT)
 @click.option('--filter-word', '-f', multiple=True)
 @click.option('--min-words', '-m', type=click.INT)
 @click.option('--max-words', '-M', type=click.INT)
@@ -185,11 +186,13 @@ def main(peaks_file, plot, connected_components, shape_clustering,
         plot_results(hist, hist_sep, hist_clus, min_words or 5, max_words or 10)
     else:
         assert not (connected_components and shape_clustering)
+
         for trend in merge_peaks_by_overlap(peaks, 0.9):
             if connected_components:
                 topics = split_topics_by_graph(trend)
             elif shape_clustering: #  and len(trend) < 100:
-                clustered = PeakClustering('complete', trend).find_clusters(0.5)
+                assert 0.0 < shape_clustering <= 1.0
+                clustered = PeakClustering('complete', trend).find_clusters(shape_clustering)
                 topics = [set(kw for kw, _ in cluster) for cluster in clustered]
             else:
                 topics = (set(kw) for kw, _ in trend)
@@ -225,7 +228,7 @@ def main(peaks_file, plot, connected_components, shape_clustering,
                     'keywords': list(topic),
                     'query': query,
                 }
-                print json.dumps(data)
+                print >> queries, json.dumps(data)
 
 
 if __name__ == '__main__':
