@@ -1,0 +1,19 @@
+user_analysis
+
+the following corresponding variables are as the output: 
+user follower count; user following count; 
+seconds passed after user account creation; 
+user top 5 tweets; 
+user sentiment label (positive, negative, neutral); 
+user expected next tweet; 
+time taken to post a tweet; 
+user favorite week of tweeting; 
+user tweets sentiment score; 
+high efficient words user used; 
+5 frequently used words by user; 
+tweets vs week graph; 
+percent of positive and negative tweets; 
+positive negative sentiment percentage graph. 
+These variables can also print in an output file.
+
+Also, the functions can also be realized by calling a real python API wrapper (i.e. tweety) with only the changing of the API OAuth tokens.
