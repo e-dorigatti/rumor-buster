@@ -148,12 +148,13 @@ def plot_results(hist, hist_sep, hist_clus, small_words, big_words):
 @click.option('--size', '-S', type=click.INT, multiple=True)
 @click.option('--connected-components', '-c', is_flag=True)
 @click.option('--shape-clustering', '-s', type=click.FLOAT)
+@click.option('--topic-peaks', '-P', is_flag=True)
 @click.option('--filter-word', '-f', multiple=True)
 @click.option('--min-words', '-m', type=click.INT)
 @click.option('--max-words', '-M', type=click.INT)
 @click.option('--queries', '-q', type=click.File('w'))
 def main(peaks_file, plot, connected_components, shape_clustering,
-         filter_word, min_words, max_words, queries, size):
+         filter_word, min_words, max_words, queries, size, topic_peaks):
     peaks = []
     for row in peaks_file:
         keyword = json.loads(row)
@@ -163,45 +164,39 @@ def main(peaks_file, plot, connected_components, shape_clustering,
                              ((peak[0], peak[-1]),
                              tuple(map(tuple, keyword['counts'])))))
 
-    if plot:
-        print 'got %d peaks' % len(peaks)
-        hist = defaultdict(int)
-        hist_sep = defaultdict(int)
-        hist_clus = defaultdict(int)
-        cluster_skipped = 0
-        for trend in merge_peaks_by_overlap(peaks, 0.9):
-            words = reduce(lambda s, t: s | t, (set(w) for w, _ in trend))
-            hist[len(words)] += 1
+    # histograms for plot
+    hist_peaks = defaultdict(int)
+    hist_sep = defaultdict(int)
+    hist_clus = defaultdict(int)
 
-            if len(trend) < 100:
-                for topic in PeakClustering('complete', trend).find_clusters(0.5):
-                    hist_clus[len(topic)] += 1
-            else:
-                cluster_skipped += 1
+    for trend in merge_peaks_by_overlap(peaks, 0.9):
+        topics_by_strategy = []
 
-            for topic in split_topics_by_graph(trend):
-                hist_sep[len(topic)] += 1
+        if plot or connected_components:
+            topics_by_strategy.append((hist_sep, split_topics_by_graph(trend)))
 
-        print 'skipped clustering for %d topics' % cluster_skipped
-        plot_results(hist, hist_sep, hist_clus, min_words or 5, max_words or 10)
-    else:
-        assert not (connected_components and shape_clustering)
+        if plot or shape_clustering:
+            if not shape_clustering:
+                shape_clustering = 0.7
 
-        for trend in merge_peaks_by_overlap(peaks, 0.9):
-            if connected_components:
-                topics = split_topics_by_graph(trend)
-            elif shape_clustering: #  and len(trend) < 100:
-                assert 0.0 < shape_clustering <= 1.0
-                clustered = PeakClustering('complete', trend).find_clusters(shape_clustering)
-                topics = [set(kw for kw, _ in cluster) for cluster in clustered]
-            else:
-                topics = (set(kw) for kw, _ in trend)
+            assert 0.0 < shape_clustering <= 1.0
+            clustered = PeakClustering('complete', trend).find_clusters(shape_clustering)
+            topics_by_strategy.append(
+                (hist_clus, [set(kw for kw, _ in cluster) for cluster in clustered])
+            )
+
+        if plot or topic_peaks:
+            topics_by_strategy.append((hist_peaks, [set((kw,)) for kw, _ in trend]))
+
+        for hist, topics in topics_by_strategy:
+            if not topics:
+                continue
 
             for topic in topics:
-                # find keywords describing the topic
                 label = set()
                 for kws in topic:
                     label.update(set(kws))
+                hist[len(label)] += 1
 
                 # optionally filter the topic
                 filter_word = set(filter_word) if filter_word else None
@@ -222,13 +217,17 @@ def main(peaks_file, plot, connected_components, shape_clustering,
                             }
                         })
                 query = {'query': {'bool': {'filter': {'bool': {'should': should}}}}}
+                keywords = reduce(lambda l1, l2: l1 + l2, map(list, topics))
 
                 data = {
                     'label': list(label),
-                    'keywords': list(topic),
+                    'keywords': keywords,
                     'query': query,
                 }
                 print >> queries, json.dumps(data)
+
+    if plot:
+        plot_results(hist_peaks, hist_sep, hist_clus, min_words or 5, max_words or 10)
 
 
 if __name__ == '__main__':
