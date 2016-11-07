@@ -79,7 +79,7 @@ class Program:
         counts = list(counts)
         buckets, values = zip(*sorted(counts, key=lambda (b, _): b))
         if len(values) < 4:
-            return
+            return []
 
         mean = stdev = None
         avg, cur_peak, peaks = [], [], []
@@ -87,6 +87,8 @@ class Program:
             if i == 0:
                 mean = y
                 stdev = 0
+
+            # not in a peak
             elif i < self.peaks_lag or (abs(y - mean) < self.peaks_diff_stdev * stdev):
                 stdev = (stdev + math.sqrt((y - mean)**2)) / 2
                 mean = (mean + y) / 2
@@ -96,6 +98,8 @@ class Program:
                     if self.peaks_diff_min <= 0 or _max - _min >= self.peaks_diff_min:
                         peaks.append(([buckets[x] for x in cur_peak], counts))
                     cur_peak = []
+
+            # in a peak
             else:
                 stdev = ((stdev + self.peaks_influence * math.sqrt((y - mean)**2)) /
                         (1 + self.peaks_influence))
@@ -116,10 +120,6 @@ class Program:
         return peaks
 
     def compute_co_occurrences(self, partition):
-        """
-        given a set of tweets, finds frequency of URLs, #hashtags, @usermentions,
-        as well as a co-occurrence matrix between tuples of words
-        """
         tagger = TreeTagger(
             TAGLANG='en',
             TAGOPT=u'-token -lemma -sgml -quiet',
@@ -133,8 +133,9 @@ class Program:
 
             for hashtag in tweet['entities']['hashtags']:
                 htag = '#' + hashtag['text']
-                words.add((htag, htag))
                 remove.append(hashtag['indices'])
+                if self.include_hashtags:
+                    words.add((htag, htag))
 
             for user in tweet['entities']['user_mentions']:
                 us = '@' + user['screen_name']
@@ -161,9 +162,9 @@ class Program:
                 (tag.lemma, tag.word) for tag in make_tags(tagger.tag_text(text))
                 if (
                     hasattr(tag, 'lemma')
-                    and tag.lemma != '<unknown>'
+                    and tag.lemma != '<unknown>'  # probably missing lots of people's names
                     and len(tag.lemma) > 1
-                    and (tag.pos[0] == 'N'            # noun
+                    and (tag.pos[0] == 'N'        # noun
                         or (self.include_verbs and tag.pos.startswith('VV'))
                         or (self.include_adverbs and tag.pos.startswith('RB'))
                         or (self.include_adjectives and tag.pos.startswith('JJ'))
@@ -173,9 +174,6 @@ class Program:
             ]))
 
             # words co-occurrences
-            if not self.include_hashtags:
-                counters = defaultdict(int)
-
             for i in xrange(1, self.nwords_max + 1):
                 for comb in itertools.combinations(words, i):
                     lemmas = sorted(w[0] for w in comb)
@@ -183,6 +181,7 @@ class Program:
 
             result = {
                 'counters': counters,
+                # if needed, can return lemma to word mapping
             }
 
             yield bucket, result
@@ -202,32 +201,32 @@ class Program:
         conf = SparkConf().setAppName('Find Co-Occurrences')
         sc = pyspark_elastic.EsSparkContext(conf=conf)
 
+        # elasticsearch if url, local file otherwise
         parsed = urlparse(self.src)
         if parsed.netloc:
             es_host, es_port = parsed.netloc.split(':')
             es_resource = parsed.path
             tweets_rdd = (sc.esRDD(es_resource, nodes=es_host, port=es_port)
-                .map(lambda (_, t): json.loads(t))
+                .map(lambda (_, t): t)
             )
         else:
-            tweets_rdd = (sc.textFile(self.src)
-                .map(lambda row: json.loads(row))
-                .map(lambda t: t.get('_source', t))
-            )
+            tweets_rdd = sc.textFile(self.src)
 
-        if self.partitions > 0:
-            tweets_rdd = tweets_rdd.repartition(self.partitions)
-
-        tweets_rdd = tweets_rdd.filter(lambda t: t['lang'] == 'en')
         if self.sample > 0.0:
             tweets_rdd = tweets_rdd.filter(lambda _: random.random() < self.sample)
 
         tweets_rdd = (tweets_rdd
+            .map(lambda row: json.loads(row))
+            .map(lambda t: t.get('_source', t))
+            .filter(lambda t: t['lang'] == 'en')
+        )
+
+        if self.partitions > 0:
+            tweets_rdd = tweets_rdd.repartition(self.partitions)
+
+        all_peaks = (tweets_rdd
             .keyBy(self.bucket_for)
             .mapPartitions(self.compute_co_occurrences)
-        ).cache()
-
-        peaks = (tweets_rdd
             .map(lambda (b, r): (b, r['counters']))
             .flatMap(self.invert_index)
             .reduceByKey(lambda c1, c2: c1 + c2)
@@ -240,12 +239,13 @@ class Program:
 
         print 'Dumping results'
         with open(self.out_file, 'w') as f:
-            for keyword, ps in peaks:
-                ps = list(ps)
+            for keyword, peaks in all_peaks:
+                all_counts = sorted(reduce(lambda l1, l2: l1 + l2, (p[1] for p in peaks)),
+                                    key=lambda (b, _): b)
                 json.dump({
                     'keyword': keyword,
-                    'counts': sorted(ps[0][1], key=lambda (b, _): b),
-                    'peaks': [p[0] for p in ps],
+                    'counts': all_counts,
+                    'peaks': [p[0] for p in peaks],
                 }, f)
                 f.write('\n')
 
