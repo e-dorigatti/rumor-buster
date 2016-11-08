@@ -33,27 +33,36 @@ def extract_features(document):
 training_set = nltk.classify.apply_features(extract_features, tweets)
 
 def main():
-	global tweets
-	#tweets = tweet
+    global tweets
+    #tweets = tweet
 
-	
-	for (words, sentiment) in pos_sent + neg_sent:
-		words_filtered = [e.lower() for e in words.split() if len(e) >= 3] 
-		print words_filtered
-		tweets.append((words_filtered, sentiment))
+    
+    for (words, sentiment) in pos_sent + neg_sent:
+        words_filtered = [e.lower() for e in words.split() if len(e) >= 3] 
+        print words_filtered
+        tweets.append((words_filtered, sentiment))
 
-	
-	global word_features
-	word_features = get_word_features(get_words_in_tweets(tweets))
+    
+    global word_features
+    word_features = get_word_features(get_words_in_tweets(tweets))
 
-	
-	global training_set
-	training_set = nltk.classify.apply_features(extract_features, tweets)
-	
-	global classifier 
-	classifier = nltk.NaiveBayesClassifier.train(training_set)
-	
+    
+    global training_set
+    training_set = nltk.classify.apply_features(extract_features, tweets)
+    
+    print 'training'
+    global classifier 
+    classifier = nltk.NaiveBayesClassifier.train(training_set)
+    #print(nltk.classify.accuracy(classifier, test_set))
+
+    import pickle
+    with open('../dev/sentiment-classifier.pkl', 'w') as f:
+        pickle.dump(classifier, f)
+    print 'saved'
+    
 def test(tweet):
-	# print(nltk.classify.accuracy(classifier, test_set))
-	return classifier.classify(extract_features(tweet.split()))
+    return classifier.classify(extract_features(tweet.split()))
 
+
+if __name__ == '__main__':
+    main()
