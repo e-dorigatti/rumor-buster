@@ -5,7 +5,6 @@ import click
 import datetime
 import sentiment
 import pickle
-from matplotlib import pyplot as plt
 
 
 def get_sentiment((input_file, classifier)):
@@ -208,6 +207,7 @@ def get_sentiment((input_file, classifier)):
 
 
 def draw(score_pos, score_neg):
+    from matplotlib import pyplot as plt
     #drawplot
     index = []
     for h in range(0, len(score_pos)):

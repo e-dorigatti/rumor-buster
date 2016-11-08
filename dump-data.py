@@ -21,7 +21,7 @@ def main(out_file, query, index, doc_type, host, port):
                 'bool': {
                     'filter': {
                         'bool': {
-                            'should': [['match_all': {}]
+                            'should': {'match_all': {}}
                         }
                     }
                 }

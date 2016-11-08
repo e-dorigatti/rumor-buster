@@ -7,3 +7,4 @@ twitter==1.17.1
 treetaggerwrapper==2.2.4
 numpy==1.11.2
 python-dateutil==2.5.3
+nltk==3.2.1

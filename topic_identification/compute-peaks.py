@@ -57,7 +57,7 @@ class Program:
             yield counts[i:j]
             i = j
 
-    def plot_peaks(self, counts, peaks, avg=None, std=None):
+    def plot_peaks(self, counts, peaks, avg=None, std=None, show=True):
         import matplotlib.pyplot as plt
         xs, ys = zip(*counts)
         plt.plot(xs, ys, 'k-')
@@ -72,8 +72,18 @@ class Program:
         for peak in peaks:
             plt.axvspan(peak[0], peak[-1], color='gray', alpha=0.25)
 
+        plt.ylim(ymin=0)
+        locs, _ = plt.xticks()
+        labels = [
+            (
+                self.epoch + datetime.timedelta(seconds=bucket * self.bucket_width)
+            ).strftime('%Y-%m-%d\n%H:%M')
+            for bucket in locs
+        ]
+        plt.xticks(locs, labels)
         plt.tight_layout()
-        plt.show()
+        if show:
+            plt.show()
 
     def detect_peaks(self, counts, plot=False):
         counts = list(counts)
@@ -176,7 +186,7 @@ class Program:
             # words co-occurrences
             for i in xrange(1, self.nwords_max + 1):
                 for comb in itertools.combinations(words, i):
-                    lemmas = sorted(w[0] for w in comb)
+                    lemmas = sorted(lemma for word, lemma in comb)
                     counters[tuple(lemmas)] += 1
 
             result = {
