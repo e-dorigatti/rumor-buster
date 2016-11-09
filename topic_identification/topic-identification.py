@@ -144,17 +144,28 @@ def plot_results(hist, hist_sep, hist_clus, small_words, big_words):
 
 @click.command()
 @click.argument('peaks-file', type=click.File('r'))
-@click.option('--plot', '-p', is_flag=True)
-@click.option('--size', '-S', type=click.INT, multiple=True)
-@click.option('--connected-components', '-c', is_flag=True)
-@click.option('--shape-clustering', '-s', type=click.FLOAT)
-@click.option('--topic-peaks', '-P', is_flag=True)
-@click.option('--filter-word', '-f', multiple=True)
-@click.option('--min-words', '-m', type=click.INT)
-@click.option('--max-words', '-M', type=click.INT)
-@click.option('--queries', '-q', type=click.File('w'))
-def main(peaks_file, plot, connected_components, shape_clustering,
-         filter_word, min_words, max_words, queries, size, topic_peaks):
+@click.option('--plot', '-p', is_flag=True,
+              help='Plot a comparison of the clustering strategies')
+@click.option('--size', '-S', type=click.INT, multiple=True,
+              help='Only consider keywords of this size')
+@click.option('--connected-components', '-c', is_flag=True,
+              help='Include peaks clustered using connected components')
+@click.option('--min-similarity', '-s', type=click.FLOAT,
+              help='Minimum correlation to cluster peaks by shape similarity')
+@click.option('--topic-peaks', '-P', is_flag=True,
+              help='Include un-clustered peaks')
+@click.option('--filter-word', '-f', multiple=True,
+              help='Include only peaks with these keywords')
+@click.option('--min-words', '-m', type=click.INT,
+              help='Include only peaks with at least this many keywords')
+@click.option('--max-words', '-M', type=click.INT,
+              help='Include only peaks with at most this many keywords')
+@click.option('--queries', '-q', type=click.File('w'),
+              help='Where to save the queries')
+@click.option('--peak-overlap', '-O', type=click.FLOAT, default=0.9,
+              help='Merge peaks overlapping in time by at least this much')
+def main(peaks_file, plot, connected_components, shape_clustering, filter_word,
+         min_words, max_words, queries, size, topic_peaks, peak_overlap):
     peaks = []
     for row in peaks_file:
         keyword = json.loads(row)
@@ -169,7 +180,7 @@ def main(peaks_file, plot, connected_components, shape_clustering,
     hist_sep = defaultdict(int)
     hist_clus = defaultdict(int)
 
-    for trend in merge_peaks_by_overlap(peaks, 0.9):
+    for trend in merge_peaks_by_overlap(peaks, peak_overlap):
         topics_by_strategy = []
 
         if plot or connected_components:
