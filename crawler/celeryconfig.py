@@ -11,13 +11,13 @@ CELERYD_TASK_SOFT_TIME_LIMIT = 5 * 60
 CELERYD_TASK_TIME_LIMIT = 7 * 60
 
 CELERY_ROUTES = {
-    'crawler.tasks.InterestingStuffStreamListener': {
+    'tasks.InterestingStuffStreamListener': {
         'queue': 'realtime'
     },
-    'crawler.tasks.expand_user_of_tweets': {
+    'tasks.expand_user_of_tweets': {
         'queue': 'low',
     },
-    'crawler.tasks.analyze_user': {
+    'tasks.analyze_user': {
         'queue': 'low',
     },
 }
