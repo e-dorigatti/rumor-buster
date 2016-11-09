@@ -26,7 +26,6 @@ class Program:
     sample = -0.1
     partitions = -1
     bucket_width = 4.0
-    peaks_lag = 3
     peaks_diff_stdev = 2.5
     peaks_diff_min = 150
     peaks_influence = 0.01
@@ -91,23 +90,22 @@ class Program:
         if len(values) < 4:
             return []
 
-        mean = stdev = None
         avg, cur_peak, peaks = [], [], []
         for i, y in enumerate(values):
             if i == 0:
                 mean = y
                 stdev = 0
+                eligible = False
 
             # not in a peak
-            elif i < self.peaks_lag or (abs(y - mean) < self.peaks_diff_stdev * stdev):
+            elif abs(y - mean) < self.peaks_diff_stdev * stdev:
                 stdev = (stdev + math.sqrt((y - mean)**2)) / 2
                 mean = (mean + y) / 2
                 if cur_peak:
-                    _min = min(values[x] for x in cur_peak)
-                    _max = max(values[x] for x in cur_peak)
-                    if self.peaks_diff_min <= 0 or _max - _min >= self.peaks_diff_min:
+                    if eligible:
                         peaks.append(([buckets[x] for x in cur_peak], counts))
                     cur_peak = []
+                    eligible = False
 
             # in a peak
             else:
@@ -115,13 +113,16 @@ class Program:
                         (1 + self.peaks_influence))
                 mean = (mean + self.peaks_influence * y) / (1 + self.peaks_influence)
                 cur_peak.append(i)
+                eligible = (
+                    eligible or
+                    self.peaks_diff_min <= 0 or
+                    abs(y - mean) >= self.peaks_diff_min
+                )
 
             avg.append((buckets[i], mean, self.peaks_diff_stdev * stdev))
 
         if cur_peak:
-            _min = min(values[x] for x in cur_peak)
-            _max = max(values[x] for x in cur_peak)
-            if self.peaks_diff_min <= 0 or _max - _min >= self.peaks_diff_min:
+            if eligible:
                 peaks.append(([buckets[x] for x in cur_peak], counts))
 
         if plot and peaks:
