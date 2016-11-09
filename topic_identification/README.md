@@ -4,10 +4,10 @@ Topic Identification
 This process is divided in two steps: first, identify peaks in the usage over time of n-words (in a bag-of-words fashion), then cluster the peaks into meaningful topics.
 
 ### Peak detection
-The first step is performed using Apache Spark via the `compute-peaks.py` script; for comfort, it can be launched using `compute-peaks.sh`, which runs it in local mode. Individual settings can be specified via the CLI, for example:
+The first step is performed using Apache Spark via the `compute_peaks.py` script; for comfort, it can be launched using `compute_peaks.sh`, which runs it in local mode. Individual settings can be specified via the CLI, for example:
 
 ```
-./compute-peaks.sh partitions=128 nwords_max=6 peaks_diff_min=75 out_file=peaks.jsonl
+./compute_peaks.sh partitions=128 nwords_max=6 peaks_diff_min=75 out_file=peaks.jsonl
 ```
 
 The allowed parameters, and their default values, are:
@@ -36,7 +36,7 @@ The output format is a [JSON Lines](http://jsonlines.org/) file, in which each l
 Clustering of peaks is done via the `topic-identification.py` script, which takes these parameters:
 
 ```
-Usage: topic-identification.py [OPTIONS] PEAKS_FILE
+Usage: topic_identification.py [OPTIONS] PEAKS_FILE
 
 Options:
   -p, --plot                  Plot a comparison of the clustering strategies

@@ -130,14 +130,18 @@ def plot_results(hist, hist_sep, hist_clus, small_words, big_words):
                 width=2, **kwargs)
 
     plt.subplot(1, 2, 2)
+    plt.clf()
     plt.grid(which='major', axis='y', linestyle='solid', color='gray')
     plt.grid(which='minor', axis='y', linestyle='dotted', color='gray')
-    plot_bars(hist, 0, color='r', log=True)
-    plot_bars(hist_sep, 1, color='b', log=True)
-    plot_bars(hist_clus, 2, color='g', log=True)
+    plot_bars(hist, 0, color='r', log=True, label='Peak Overlap')
+    plot_bars(hist_sep, 1, color='b', log=True,
+              label='Peak Overlap + Connected Components')
+    plot_bars(hist_clus, 2, color='g', log=True,
+              label='Peak Overlap + Shape Clustering')
     plt.xticks([10, 20, 30], ['Less than %d words' % small_words,
                               'Between %d and %d words' % (small_words, big_words),
                               'More than %d words' % big_words])
+    plt.legend(loc='upper right')
     plt.tight_layout()
     plt.show()
 
@@ -164,7 +168,7 @@ def plot_results(hist, hist_sep, hist_clus, small_words, big_words):
               help='Where to save the queries')
 @click.option('--peak-overlap', '-O', type=click.FLOAT, default=0.9,
               help='Merge peaks overlapping in time by at least this much')
-def main(peaks_file, plot, connected_components, shape_clustering, filter_word,
+def main(peaks_file, plot, connected_components, min_similarity, filter_word,
          min_words, max_words, queries, size, topic_peaks, peak_overlap):
     peaks = []
     for row in peaks_file:
@@ -186,12 +190,12 @@ def main(peaks_file, plot, connected_components, shape_clustering, filter_word,
         if plot or connected_components:
             topics_by_strategy.append((hist_sep, split_topics_by_graph(trend)))
 
-        if plot or shape_clustering:
-            if not shape_clustering:
-                shape_clustering = 0.7
+        if plot or min_similarity:
+            if not min_similarity:
+                min_similarity = 0.7
 
-            assert 0.0 < shape_clustering <= 1.0
-            clustered = PeakClustering('complete', trend).find_clusters(shape_clustering)
+            assert 0.0 < min_similarity <= 1.0
+            clustered = PeakClustering('complete', trend).find_clusters(min_similarity)
             topics_by_strategy.append(
                 (hist_clus, [set(kw for kw, _ in cluster) for cluster in clustered])
             )

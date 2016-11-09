@@ -56,7 +56,7 @@ class Program:
             yield counts[i:j]
             i = j
 
-    def plot_peaks(self, counts, peaks, avg=None, std=None, show=True):
+    def plot_peaks(self, counts, peaks, avg=None, show=False):
         import matplotlib.pyplot as plt
         xs, ys = zip(*counts)
         plt.plot(xs, ys, 'k-')
@@ -98,7 +98,7 @@ class Program:
                 eligible = False
 
             # not in a peak
-            elif abs(y - mean) < self.peaks_diff_stdev * stdev:
+            elif y - mean < self.peaks_diff_stdev * stdev:
                 stdev = (stdev + math.sqrt((y - mean)**2)) / 2
                 mean = (mean + y) / 2
                 if cur_peak:
