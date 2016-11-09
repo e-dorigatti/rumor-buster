@@ -18,3 +18,5 @@ These variables can also print in an output file.
 
 A local api was built to perform as a api warpper while grab the information from the result of crawling task.
 In orther words, the functions can also be realized by calling a real python API wrapper (i.e. tweety) with only the changing of the API OAuth tokens.
+
+Details please kindly see the corresponding part of group report.
