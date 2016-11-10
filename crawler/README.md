@@ -23,3 +23,5 @@ Finally, it is possible to crawl using the "interesting" strategy, which crawls 
 ```
 $ python crawl.py interesting
 ```
+
+The 3 millions tweets crawled during the duration of the project can be downloaded from [https://drive.google.com/open?id=0BwTnXnG7pvmHX3RhNEdvVG1UWFU](https://drive.google.com/open?id=0BwTnXnG7pvmHX3RhNEdvVG1UWFU), while the data for the users from [https://drive.google.com/open?id=0BwTnXnG7pvmHOHBOcHk2SkYzckk](https://drive.google.com/open?id=0BwTnXnG7pvmHOHBOcHk2SkYzckk). Additionally, the `resources` folder contains a sample of tweets related to the Nobel prize and to the Great Barrier Reef.
