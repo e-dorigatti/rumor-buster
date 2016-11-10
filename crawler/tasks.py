@@ -262,7 +262,7 @@ class SimpleStreamListener(BaseStreamListener):
     @staticmethod
     def get_task():
         # quite an ugly hack
-        return app.tasks['crawler.tasks.SimpleStreamListener']
+        return app.tasks['tasks.SimpleStreamListener']
 
     def save_tweet(self, status):
         data = json.dumps(status)
