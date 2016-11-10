@@ -2,7 +2,7 @@ Topic Identification
 ===
 
 This process is divided in two steps: first, identify peaks in the usage over time of n-words (in a bag-of-words fashion), then cluster the peaks into meaningful topics.
-The resources folder contains the peaks found on the 3 millions tweets dataset using 25 and 75 as `peaks_diff_min` (see next section), as well as the topics found using the two availabel strategies. Additionally, there are some plots about statistical properties of the peaks, as computed by `peak_stats.py`.
+The resources folder contains the peaks found on the 3 millions tweets dataset using 25 and 75 as `peaks_diff_min` (see next section), as well as the topics found using the two availabel strategies. Additionally, there are some plots about statistical properties of the peaks, as computed by `peak_stats.py -s <property>`.
 
 ### Peak detection
 The first step is performed using Apache Spark via the `compute_peaks.py` script; for comfort, it can be launched using `compute_peaks.sh`, which runs it in local mode. Individual settings can be specified via the CLI, for example:
